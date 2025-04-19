@@ -4,8 +4,14 @@ import json
 import argparse
 import os
 
+# 随机参数范围
+JOB_NUM = (10, 50) # 任务数
+CYCLE = (200, 3000) # 迭代周期
+WORKLOAD_NUM = (10, 50) # 负载数
+BANDWIDTH = (5, 20) # 带宽需求
+
 def get_host_nodes(topology_file: str) -> list[int]:
-    """获取所有 HOST 类型的节点"""
+    # 读取所有 Host 节点
     df = pd.read_csv(topology_file)
     hosts = set()
     for _, row in df.iterrows():
@@ -15,68 +21,72 @@ def get_host_nodes(topology_file: str) -> list[int]:
             hosts.add(row['z_node_id'])
     return sorted(list(hosts))
 
-def generate_random_workload(host_nodes: list[int]) -> list[dict]:
-    """生成随机workload数据"""
-    workload = []
-
-    num_jobs = random.randint(10, 50)
+def generate_jobs(host_nodes: list[int]) -> list[dict]:
     
-    for job_id in range(num_jobs):
-        # 随机生成一个200-3000ms范围内的周期
-        cycle = random.randint(200, 3000)
+    # 随机生成多个任务的 Workload
+    jobs = []
+    job_num = random.randint(JOB_NUM[0], JOB_NUM[1])
+    
+    for job_id in range(job_num):
+        cycle = random.randint( CYCLE[0], CYCLE[1])
+        workload_num = random.randint(WORKLOAD_NUM[0], WORKLOAD_NUM[1])
+        workloads = []
         
-        # 每个作业随机生成1-3个demands
-        num_demands = random.randint(1, 5)
-        demands = []
-        
-        for _ in range(num_demands):
-            # 随机选择源和目的节点
-            src_rank = random.choice(host_nodes)
-            dst_rank = random.choice([n for n in host_nodes if n != src_rank])
+        for _ in range(workload_num):
+            # 源-目的节点
+            src = random.choice(host_nodes)
+            dst = random.choice([n for n in host_nodes if n != src])
             
-            # 随机生成带宽需求 (5-100 Gbps)
-            bandwidth = random.randint(5, 100)
+            # 带宽需求
+            bandwidth = random.randint(BANDWIDTH[0], BANDWIDTH[1])
             
-            # 随机生成时间窗口，确保在周期内且start < end
+            # 负载时间窗口
             start_time = random.randint(0, cycle - 100)
             end_time = random.randint(start_time + 50, min(start_time + 200, cycle))
             
-            demands.append({
-                "src_rank": src_rank,
-                "dst_rank": dst_rank,
+            workloads.append({
+                "src_rank": src,
+                "dst_rank": dst,
                 "start_timestamp(ms)": start_time,
                 "end_timestamp(ms)": end_time,
                 "bandwidth(Gbps)": bandwidth
             })
         
-        workload.append({
+        jobs.append({
             "job_id": job_id,
             "cycle(ms)": cycle,
-            "demands": demands
+            "workloads": workloads
         })
     
-    return workload
+    return jobs
 
 def generate_batch_workloads(topology_file: str, output_dir: str, num_cases: int = 50) -> None:
-    """生成多个测试用例"""
+
     host_nodes = get_host_nodes(topology_file)
     
-    # 创建输出目录
+    # 创建负载文件输出目录，清空旧文件
     os.makedirs(output_dir, exist_ok=True)
+    for filename in os.listdir(output_dir):
+        file_path = os.path.join(output_dir, filename)
+        try:
+            if os.path.isfile(file_path):
+                os.remove(file_path)
+        except Exception as e:
+            print(f"Error deleting file {file_path}: {e}")
     
     for case_id in range(1, num_cases + 1):
-        workload = generate_random_workload(host_nodes)
+        jobs = generate_jobs(host_nodes)
         output_file = os.path.join(output_dir, f"testcase{case_id}.json")
         
         with open(output_file, 'w') as f:
-            json.dump(workload, f, indent=2)
+            json.dump(jobs, f, indent=2)
         print(f"Generated testcase {case_id} saved to {output_file}")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Generate random workload data')
-    parser.add_argument('--topology', type=str, default='multi_job/link_list.csv',
+    parser.add_argument('--topology', type=str, default='data/topology/link_list.csv',
                       help='Path to the topology CSV file')
-    parser.add_argument('--output', type=str, default='testcases',
+    parser.add_argument('--output', type=str, default='data/workload',
                       help='Directory to save the output workload files')
     parser.add_argument('--num-cases', type=int, default=50,
                       help='Number of test cases to generate')
