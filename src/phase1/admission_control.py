@@ -1,0 +1,137 @@
+import gurobipy as gp
+from gurobipy import GRB
+from dataclasses import dataclass
+import numpy as np
+from typing import Optional
+import copy
+import sys
+import os
+from job.job_info import JobInfo
+
+# 动态添加项目根目录到 sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
+
+from network.graph import Graph, Link
+from network.path_finder import PathFinder
+from phase2.traffic_schedule import SCHEDULE_INTERVAL
+# 每隔 SCHEDULE_INTERVAL 进行一次流量调度，因此最多考虑 SCHEDULE_INTERVAL 个 epoch 的重叠周期即可
+
+# 定义宏来简化变量类型
+Tunnel = list[Link]
+
+@dataclass
+class Traffic:
+    job_id: int
+    cycle: int # (epoch)
+    t_s: int # (epoch)
+    t_e: int # (epoch)
+    bw: float # (Gbps)
+    
+# 单个任务的调度
+@dataclass
+class JobSchedule:
+    admit: bool # 是否准入
+    start_time: int  # 任务启动时间（epoch）
+    tunnels: list[Tunnel] # 每个负载的隧道
+    bw_alloc: list[float] # 每个负载在隧道上分配的带宽
+    # TODO: 这里只考虑每个负载单条流的情况，bw_alloc 一定等于负载的 bw，后续输入多条隧道时再进行修改
+
+class AdmissionController():
+
+    def __init__(self, network: Graph):
+
+        self.network: Graph = network
+
+        # 算路器，提供隧道
+        self.path_finder = PathFinder(network)
+
+        # 链路流量模式
+        self.link_traffic: dict[int, list[Traffic]] = {} # 链路上经过的流量模式 link_id -> list[Traffic]
+        # 链路所有流量变化的时间点
+        self.change_points: dict[int, set[int]] = {} # link_id -> set[int]
+        # 链路峰值带宽
+        self.link_peak_bw: dict[int, float] = {} # link_id -> peak_bandwidth
+        # 任务调度
+        self.job_schedules: dict[int, JobSchedule] = {} # job_id -> JobSchedule
+        
+        # 参数设置
+        self.strat_time_step = 10 # 枚举启动时间的步长
+
+    def update_peak_bw(self, link_id: int) -> None:
+        
+        peak_bw = 0.0
+        # 在每个流量变化时间点计算总带宽
+        for time in sorted(list(self.change_points)):
+            bw_now = 0.0
+            for traffic in self.link_traffic[link_id]:
+                job_id = traffic.job_id
+                time_in_circle = (time + traffic.cycle - self.job_schedules[job_id].start_time) % traffic.cycle
+                if time_in_circle >= traffic.t_s and time_in_circle < traffic.t_e:
+                    bw_now += traffic.bw
+            peak_bw = max(peak_bw, bw_now)
+        self.link_peak_bw[link_id] = peak_bw
+
+    def add_traffic(self, link_id: int, traffic: Traffic) -> None:
+        
+        if link_id not in self.link_peak_bw:
+            self.link_peak_bw[link_id] = 0.0
+        
+        # 添加流量
+        self.link_traffic[link_id].append(traffic)
+
+        # 重叠流量周期
+        # circle_list = []
+        # for traffic in self.link_traffic[link_id]:
+        #     circle_list.append(traffic.cycle)
+        # overlap_circle = min(np.lcm.reduce(circle_list), SCHEDULE_INTERVAL) # 重叠流量周期
+        # TODO: 这里为了方便直接设置成 SCHEDULE_INTERVAL，因为算出来的最小公倍数可能远远大于这个数。具体如何处理后续再考虑
+        overlap_circle = SCHEDULE_INTERVAL
+
+        # 添加新流量的变化时间点
+        for circle_offset in range(0, overlap_circle, traffic.cycle):
+            start = (traffic.t_s + circle_offset + self.job_schedules[traffic.job_id].start_time) % overlap_circle
+            end = (traffic.t_e + circle_offset + self.job_schedules[traffic.job_id].start_time) % overlap_circle
+                        
+            self.change_points[link_id].add(start)
+            self.change_points[link_id].add(end)
+
+        # 更新链路峰值带宽
+        self.update_peak_bw(link_id)
+    
+    def direct_deploy(self, job: JobInfo) -> bool:
+        job_id = job.job_id
+
+        # 基于贪心策略，尝试直接部署任务
+        for workload in job.workloads:
+            tunnel: Tunnel = self.path_finder.find_path(workload.src, workload.dst)
+            self.job_schedules[job_id].tunnels.append(tunnel)
+            # TODO: 如果后续改为每个负载多条流，则这里需要遍历所有隧道依次分配带宽
+            if not tunnel:
+                return False
+            
+            for link in tunnel:
+                if (link.capacity - self.link_peak_bw[link.link_id]) < workload.bw: # 链路剩余容量小于所需带宽
+                    return False
+        # 剩余容量充足，则任务准入
+        self.job_schedules[job_id].admit = True
+        # 启动时间默认为 0
+        self.job_schedules[job_id].start_time = 0
+        # 分配带宽
+        for workload_id, workload in enumerate(job.workloads):
+            self.job_schedules[job_id].bw_alloc.append(workload.bw)
+            
+            # 更新链路流量模式
+            traffic = Traffic(
+                    job_id = job_id,
+                    cycle = job.cycle,
+                    t_s = workload.t_s,
+                    t_e = workload.t_e,
+                    bw = workload.bw
+                )
+            for link in self.job_schedules[job_id].tunnels[workload_id]:
+                link_id = link.link_id
+                if link_id not in self.link_traffic:
+                    self.link_traffic[link_id] = []
+                # 添加流量
+                self.add_traffic(link_id, traffic)
+        return True

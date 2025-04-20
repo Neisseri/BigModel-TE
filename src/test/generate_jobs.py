@@ -86,8 +86,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Generate random workload data')
     parser.add_argument('--topology', type=str, default='data/topology/link_list.csv',
                       help='Path to the topology CSV file')
-    parser.add_argument('--output', type=str, default='data/workload',
-                      help='Directory to save the output workload files')
+    parser.add_argument('--output', type=str, default='data/jobs',
+                      help='Directory to save the output jobs files')
     parser.add_argument('--num-cases', type=int, default=50,
                       help='Number of test cases to generate')
     parser.add_argument('--seed', type=int, default=None,
