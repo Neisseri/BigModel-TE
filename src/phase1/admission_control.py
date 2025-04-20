@@ -30,7 +30,7 @@ class Traffic:
 # 单个任务的调度
 @dataclass
 class JobSchedule:
-    admit: bool # 是否准入
+    admit: int # 是否准入
     start_time: int  # 任务启动时间（epoch）
     tunnels: list[Tunnel] # 每个负载的隧道
     bw_alloc: list[float] # 每个负载在隧道上分配的带宽
@@ -42,6 +42,9 @@ class AdmissionController():
 
         self.network: Graph = network
 
+        # 已发起部署请求的任务集合
+        self.jobs: dict[int, JobInfo] = {}
+
         # 算路器，提供隧道
         self.path_finder = PathFinder(network)
 
@@ -51,6 +54,8 @@ class AdmissionController():
         self.change_points: dict[int, set[int]] = {} # link_id -> set[int]
         # 链路峰值带宽
         self.link_peak_bw: dict[int, float] = {} # link_id -> peak_bandwidth
+        # 链路峰值带宽所在时间点
+        self.link_peak_bw_points: dict[int, int] = {} # link_id -> peak_bandwidth_time_point
         # 任务调度
         self.job_schedules: dict[int, JobSchedule] = {} # job_id -> JobSchedule
         
@@ -68,13 +73,17 @@ class AdmissionController():
                 time_in_circle = (time + traffic.cycle - self.job_schedules[job_id].start_time) % traffic.cycle
                 if time_in_circle >= traffic.t_s and time_in_circle < traffic.t_e:
                     bw_now += traffic.bw
-            peak_bw = max(peak_bw, bw_now)
+            if bw_now >= peak_bw:
+                peak_bw = bw_now
+                self.link_peak_bw_points[link_id] = time
         self.link_peak_bw[link_id] = peak_bw
 
     def add_traffic(self, link_id: int, traffic: Traffic) -> None:
         
         if link_id not in self.link_peak_bw:
             self.link_peak_bw[link_id] = 0.0
+        if link_id not in self.link_peak_bw_points:
+            self.link_peak_bw_points[link_id] = 0
         
         # 添加流量
         self.link_traffic[link_id].append(traffic)
@@ -98,22 +107,34 @@ class AdmissionController():
         # 更新链路峰值带宽
         self.update_peak_bw(link_id)
     
-    def direct_deploy(self, job: JobInfo) -> bool:
+    def direct_deploy(self, job: JobInfo) -> int:
+        
         job_id = job.job_id
+        self.jobs[job_id] = job
+        self.job_schedules[job_id] = JobSchedule(
+            admit = 0,
+            start_time = 0,
+            tunnels = [],
+            bw_alloc = []
+        )
 
         # 基于贪心策略，尝试直接部署任务
+        alloc_success = True
         for workload in job.workloads:
             tunnel: Tunnel = self.path_finder.find_path(workload.src, workload.dst)
             self.job_schedules[job_id].tunnels.append(tunnel)
+
             # TODO: 如果后续改为每个负载多条流，则这里需要遍历所有隧道依次分配带宽
-            if not tunnel:
-                return False
-            
+            # TODO: 这里还需要考虑负载时间上重叠的情况（也就是说要进行临时分配）
             for link in tunnel:
                 if (link.capacity - self.link_peak_bw[link.link_id]) < workload.bw: # 链路剩余容量小于所需带宽
-                    return False
+                    alloc_success = False
+        if not alloc_success:
+            # 直接部署失败
+            return 0
+                
         # 剩余容量充足，则任务准入
-        self.job_schedules[job_id].admit = True
+        self.job_schedules[job_id].admit = 1
         # 启动时间默认为 0
         self.job_schedules[job_id].start_time = 0
         # 分配带宽
@@ -134,4 +155,86 @@ class AdmissionController():
                     self.link_traffic[link_id] = []
                 # 添加流量
                 self.add_traffic(link_id, traffic)
-        return True
+        return 1
+
+    def link_adjust(self, link_id: int) -> bool:
+        # TODO: 由于当前每个负载分配一条流，所以只进行启动时间调度
+        peak_bw_point = self.link_peak_bw_points[link_id]
+        # 筛选 peak_bw_point 时刻所有活跃流量
+        job_to_adjust: list[int, float] = []
+        for traffic in self.link_traffic[link_id]:
+            job_id = traffic.job_id
+            time_in_circle = (peak_bw_point + traffic.cycle - self.job_schedules[job_id].start_time) % traffic.cycle
+            if time_in_circle >= traffic.t_s and time_in_circle < traffic.t_e:
+                job_to_adjust.append((job_id, traffic.bw))
+        job_to_adjust.sort(key=lambda x: x[1], reverse=True)
+
+        # 优先调整带宽大的流量所属的任务启动时间
+        for job in job_to_adjust:
+            job_id = job[0]
+            # 记录任务原有启动时间，用于后续回退
+            original_start_time = self.job_schedules[job_id].start_time
+            # 找到一个启动时间，使 self.link_peak_bw[link_id] <= link.capacity
+            for start_time in range(0, self.jobs[job_id].cycle, self.strat_time_step):
+                self.job_schedules[job_id].start_time = start_time
+                self.update_peak_bw(link_id)
+                if self.link_peak_bw[link_id] <= self.network.edges[link_id].capacity:
+                    # 该链路的局部调整成功（使总带宽没有超出链路容量）
+                    # TODO: 还需要检查该任务经过的其他链路是否溢出
+                    return True
+            # 回退当前任务启动时间
+            self.job_schedules[job_id].start_time = original_start_time
+                
+        return False
+            
+
+    def local_adjust(self, job: JobInfo) -> int:
+
+        job_id = job.job_id
+        # 记录分配到了第几个负载，用于后续无法准入时回退
+        workload_ptr = 0
+        
+        tag = True
+        for workload_id, workload in enumerate(job.workloads):
+            
+            workload_ptr = workload_id
+
+            tunnel: Tunnel = self.job_schedules[job_id].tunnels[workload_id]
+            # 分配带宽
+            traffic: Traffic = Traffic(
+                    job_id = job_id,
+                    cycle = job.cycle,
+                    t_s = workload.t_s,
+                    t_e = workload.t_e,
+                    bw = workload.bw
+                )
+            for link in tunnel:
+                self.add_traffic(link.link_id, traffic)
+                if self.link_peak_bw[link.link_id] > link.capacity:
+                    # 负载分配失败，尝试局部调整
+                    adjust_success = self.link_adjust(link.link_id)
+                    if adjust_success == False:
+                        tag = False
+                        break
+            if tag == False:
+                break
+        
+        if tag == False:
+            # 回退已分配流量
+            for workload_id, workload in enumerate(job.workloads):
+                if workload_id > workload_ptr:
+                    break
+                for link in tunnel:
+                    # 删除最后一个元素（即当前任务的流量）
+                    self.link_traffic[link.link_id].pop()
+            return 0
+        else:
+            # 任务准入
+            self.job_schedules[job_id].admit = 1
+            # 启动时间默认为 0
+            self.job_schedules[job_id].start_time = 0
+            # 分配带宽
+            for workload_id, workload in enumerate(job.workloads):
+                self.job_schedules[job_id].bw_alloc.append(workload.bw)
+            return 1
+        

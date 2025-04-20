@@ -43,12 +43,16 @@ def run_admission_control(topology_file: str, jobs_file: str) -> None:
     a = [0] * len(jobs_data)
 
     admission_controller = AdmissionController(network)
-    for job in jobs:
-        admit: bool = False
-        # Step 1：直接部署
-        admit = admission_controller.direct_deploy(job)
+    for job_id, job in enumerate(jobs):
 
-    # Step 2: 局部调整
+        # Step 1：直接部署
+        a[job_id] = admission_controller.direct_deploy(job)
+
+        # Step 2: 局部调整
+        if a[job_id] == 0:
+            a[job_id] = admission_controller.local_adjust(job)
+
+    print("Total admitted jobs:", sum(a))
 
 if __name__ == '__main__':
     
