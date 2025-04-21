@@ -1,10 +1,14 @@
 import json
 import os
 import pandas as pd
+import time
 from network.graph import Graph
 from phase1.admission_control import AdmissionController
+from phase2.traffic_schedule import TrafficScheduler
 from job.job_info import JobInfo, EPOCH
 from job.workload import Workload
+from phase2.traffic_schedule import SCHEDULE_INTERVAL
+from .workload_fluctuate import random_fluctuate
 
 def run_admission_control(topology_file: str, jobs_file: str) -> None:
 
@@ -38,6 +42,8 @@ def run_admission_control(topology_file: str, jobs_file: str) -> None:
         job_info = JobInfo(job_id, cycle, workloads)
         jobs.append(job_info)
 
+    # Phase 1：准入控制
+
     # 输出：
     # a_j = {0, 1}，表示任务 j 是否准入
     a = [0] * len(jobs_data)
@@ -53,6 +59,15 @@ def run_admission_control(topology_file: str, jobs_file: str) -> None:
             a[job_id] = admission_controller.local_adjust(job)
 
     print("Total admitted jobs:", sum(a))
+
+    # Phase 2：流量调度
+    traffic_scheduler = TrafficScheduler(network, jobs, admission_controller.job_schedules)
+    while (True):
+        # 程序等待 （EPOCH * SCHEDULE_INTERVAL）ms 的时间
+        wait_time = EPOCH * SCHEDULE_INTERVAL / 1000  # 转换为秒
+        time.sleep(wait_time)
+        new_jobs = random_fluctuate(jobs)
+        new_schedules = traffic_scheduler.update_schedule(new_jobs)
 
 if __name__ == '__main__':
     
