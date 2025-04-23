@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from workload import Workload
+from .workload import Workload
 
 EPOCH = 10 # 1 epoch = () ms
 

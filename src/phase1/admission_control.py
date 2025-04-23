@@ -13,7 +13,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"
 
 from network.graph import Graph, Link
 from network.path_finder import PathFinder
-from phase2.traffic_schedule import SCHEDULE_INTERVAL
+from params import SCHEDULE_INTERVAL
 # 每隔 SCHEDULE_INTERVAL 进行一次流量调度，因此最多考虑 SCHEDULE_INTERVAL 个 epoch 的重叠周期即可
 
 # 定义宏来简化变量类型
@@ -127,6 +127,12 @@ class AdmissionController():
             # TODO: 如果后续改为每个负载多条流，则这里需要遍历所有隧道依次分配带宽
             # TODO: 这里还需要考虑负载时间上重叠的情况（也就是说要进行临时分配）
             for link in tunnel:
+                if self.link_peak_bw.get(link.link_id) is None:
+                    self.link_peak_bw[link.link_id] = 0.0
+                    self.link_peak_bw_points[link.link_id] = 0
+                    self.link_traffic[link.link_id] = []
+                    self.change_points[link.link_id] = set()
+
                 if (link.capacity - self.link_peak_bw[link.link_id]) < workload.bw: # 链路剩余容量小于所需带宽
                     alloc_success = False
         if not alloc_success:
@@ -157,7 +163,7 @@ class AdmissionController():
                 self.add_traffic(link_id, traffic)
         return 1
 
-    def link_adjust(self, link_id: int) -> bool:
+    def link_adjust(self, link_id: int, link_capacity: float) -> bool:
         # TODO: 由于当前每个负载分配一条流，所以只进行启动时间调度
         peak_bw_point = self.link_peak_bw_points[link_id]
         # 筛选 peak_bw_point 时刻所有活跃流量
@@ -178,7 +184,7 @@ class AdmissionController():
             for start_time in range(0, self.jobs[job_id].cycle, self.strat_time_step):
                 self.job_schedules[job_id].start_time = start_time
                 self.update_peak_bw(link_id)
-                if self.link_peak_bw[link_id] <= self.network.edges[link_id].capacity:
+                if self.link_peak_bw[link_id] <= link_capacity:
                     # 该链路的局部调整成功（使总带宽没有超出链路容量）
                     # TODO: 还需要检查该任务经过的其他链路是否溢出
                     return True
@@ -192,12 +198,10 @@ class AdmissionController():
 
         job_id = job.job_id
         # 记录分配到了第几个负载，用于后续无法准入时回退
-        workload_ptr = 0
+        rollback_count = 0
         
         tag = True
         for workload_id, workload in enumerate(job.workloads):
-            
-            workload_ptr = workload_id
 
             tunnel: Tunnel = self.job_schedules[job_id].tunnels[workload_id]
             # 分配带宽
@@ -209,10 +213,11 @@ class AdmissionController():
                     bw = workload.bw
                 )
             for link in tunnel:
+                rollback_count += 1
                 self.add_traffic(link.link_id, traffic)
                 if self.link_peak_bw[link.link_id] > link.capacity:
                     # 负载分配失败，尝试局部调整
-                    adjust_success = self.link_adjust(link.link_id)
+                    adjust_success = self.link_adjust(link.link_id, link.capacity)
                     if adjust_success == False:
                         tag = False
                         break
@@ -222,12 +227,16 @@ class AdmissionController():
         if tag == False:
             # 回退已分配流量
             for workload_id, workload in enumerate(job.workloads):
-                if workload_id > workload_ptr:
-                    break
+                tunnel: Tunnel = self.job_schedules[job_id].tunnels[workload_id]
                 for link in tunnel:
+
+                    rollback_count -= 1
+                    if rollback_count < 0:
+                        return 0
+                    
                     # 删除最后一个元素（即当前任务的流量）
                     self.link_traffic[link.link_id].pop()
-            return 0
+
         else:
             # 任务准入
             self.job_schedules[job_id].admit = 1

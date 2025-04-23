@@ -9,12 +9,14 @@ class PathFinder:
         # 为简化实现，仅寻找一条最短路（即每个负载分配一条流）
         path: list[Link] = []
 
-        pq = []  # 优先队列，存储 (当前节点, 路径)
-        heapq.heappush(pq, (src, []))
+        pq = []  # 优先队列，存储 (优先级, 当前节点, 路径)
+        heapq.heappush(pq, (0, src, []))  # 优先级初始化为 0
         visited = set()
 
         while pq:
-            node, path = heapq.heappop(pq)
+            _, node, path = heapq.heappop(pq)  # 解包优先级、当前节点和路径
+            if node in visited:
+                continue
             visited.add(node)
 
             if node == dst:
@@ -22,7 +24,8 @@ class PathFinder:
 
             for link in self.graph.edges.get(node, []):
                 if link.dst not in visited:
-                    heapq.heappush(pq, (link.dst, path + [link]))
+                    # 使用链路容量作为优先级（或其他权重）
+                    heapq.heappush(pq, (link.capacity, link.dst, path + [link]))
 
         return []
 

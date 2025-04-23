@@ -1,3 +1,10 @@
 data
 result
 .vscode
+figure
+src/__pycache__/
+src/job/__pycache__/
+src/network/__pycache__/
+src/phase1/__pycache__/
+src/phase2/__pycache__/
+src/test/__pycache__/

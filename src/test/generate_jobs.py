@@ -5,10 +5,10 @@ import argparse
 import os
 
 # 随机参数范围
-JOB_NUM = (10, 50) # 任务数
+JOB_NUM = (10, 30) # 任务数
 CYCLE = (200, 3000) # 迭代周期
 WORKLOAD_NUM = (10, 50) # 负载数
-BANDWIDTH = (5, 20) # 带宽需求
+BANDWIDTH = (20, 70) # 带宽需求
 
 def get_host_nodes(topology_file: str) -> list[int]:
     # 读取所有 Host 节点
