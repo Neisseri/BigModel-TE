@@ -77,9 +77,20 @@ def run_admission_control(topology_file: str, jobs_file: str, strategy: str) -> 
                 a[job_id] = admission_controller.local_adjust(job)
 
     elif strategy == "FCFS":
-        admission_controller = FCFS(network)
+        # FCFS_controller = FCFS(network)
+        # for job_id, job in enumerate(jobs):
+        #     print(f"Processing job {job_id}...")
+        #     job_demand = FCFS_controller.get_demand(job)
+
+        #     a[job_id] = FCFS_controller.direct_deploy(job_demand)
+        #     # if a[job_id] == 0:
+        #     #     a[job_id] = FCFS_controller.reschedule(job_demand)
+        admission_controller = AdmissionController(network)
         for job_id, job in enumerate(jobs):
             print(f"Processing job {job_id}...")
+
+            # Step 1：直接部署
+            a[job_id] = admission_controller.direct_deploy(job)
     else:
         raise ValueError(f"Unknown strategy: {strategy}")
 
@@ -91,13 +102,15 @@ def run_admission_control(topology_file: str, jobs_file: str, strategy: str) -> 
         f.write(f"{os.path.basename(jobs_file)}: {sum(a)} / {len(jobs_data)} = {sum(a) / len(jobs_data):.2f}\n")
 
     # Phase 2：流量调度
-    traffic_scheduler = TrafficScheduler(network, jobs, admission_controller.job_schedules)
-    while (TRAFFIC_SCHEDULE_SWITCH):
-        # 程序等待 （EPOCH * SCHEDULE_INTERVAL）ms 的时间
-        wait_time = EPOCH * SCHEDULE_INTERVAL / 1000  # 转换为秒
-        time.sleep(wait_time)
-        new_jobs = random_fluctuate(jobs)
-        new_schedules = traffic_scheduler.update_schedule(new_jobs)
+    if TRAFFIC_SCHEDULE_SWITCH:
+        
+        traffic_scheduler = TrafficScheduler(network, jobs, admission_controller.job_schedules)
+        while (True):
+            # 程序等待 （EPOCH * SCHEDULE_INTERVAL）ms 的时间
+            wait_time = EPOCH * SCHEDULE_INTERVAL / 1000  # 转换为秒
+            time.sleep(wait_time)
+            new_jobs = random_fluctuate(jobs)
+            new_schedules = traffic_scheduler.update_schedule(new_jobs)
 
 if __name__ == '__main__':
     # 添加命令行参数解析
