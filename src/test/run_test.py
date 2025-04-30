@@ -65,6 +65,8 @@ def run_admission_control(topology_file: str, jobs_file: str, strategy: str) -> 
     # 根据策略选择准入控制方法
     if strategy == "TE":
 
+        # 启用抢占式（带宽小的任务优先）
+        jobs = sorted(jobs, key=lambda x: sum(w.bw for w in x.workloads))
         # 跨域大模型流量工程方案
         admission_controller = AdmissionController(network)
         for job_id, job in enumerate(jobs):
@@ -87,6 +89,15 @@ def run_admission_control(topology_file: str, jobs_file: str, strategy: str) -> 
         #     #     a[job_id] = FCFS_controller.reschedule(job_demand)
         admission_controller = AdmissionController(network)
         for job_id, job in enumerate(jobs):
+            print(f"Processing job {job_id}...")
+
+            # Step 1：直接部署
+            a[job_id] = admission_controller.direct_deploy(job)
+    elif strategy == "SJF":
+        # 总带宽需求小的任务优先
+        priority_jobs = sorted(jobs, key=lambda x: sum(w.bw for w in x.workloads))
+        admission_controller = AdmissionController(network)
+        for job_id, job in enumerate(priority_jobs):
             print(f"Processing job {job_id}...")
 
             # Step 1：直接部署
@@ -116,7 +127,7 @@ if __name__ == '__main__':
     # 添加命令行参数解析
     parser = argparse.ArgumentParser(description="Run admission control with different strategies.")
     parser.add_argument("--strategy", type=str, default="TE", 
-                        choices=["TE", "FCFS"], 
+                        choices=["TE", "FCFS", "SJF"], 
                         help="Admission control strategy to use (default: TE)")
     args = parser.parse_args()
 
