@@ -77,7 +77,36 @@ class TrafficScheduler:
         for link_id in range(self.network.link_num):
             self.update_peak_bw(link_id)
 
-    def update_schedule(self, new_jobs: list[JobInfo]) -> dict[int, JobSchedule]:
+    def calculate_bottleneck_bw(self, tunnel: Tunnel, job_idx: int, workload_idx: int) -> float:
+        
+        bottleneck_bw = float("inf")
+
+        for link in tunnel:
+            # TODO: 这里为了方便直接设置成 SCHEDULE_INTERVAL，因为算出来的最小公倍数可能远远大于这个数。具体如何处理后续再考虑
+            overlap_circle = SCHEDULE_INTERVAL
+
+            cycle = self.old_jobs[job_idx].cycle
+            t_s = (self.old_jobs[job_idx].workloads[workload_idx].t_s + self.old_schedules[job_idx].start_time) % cycle
+            t_e = (self.old_jobs[job_idx].workloads[workload_idx].t_e + self.old_schedules[job_idx].start_time) % cycle
+            
+            link_alloc_bw = 0.0
+            # 在每个流量变化时间点计算总带宽
+            for time in sorted(list(self.change_points[link.link_id])):
+                if time % cycle >= t_s and time % cycle < t_e:
+                    # 计算当前时间点的带宽
+                    bw_now = 0.0
+                    for traffic in self.link_traffic[link.link_id]:
+                        job_id = traffic.job_id
+                        time_in_circle = (time + traffic.cycle - self.old_schedules[job_id].start_time) % traffic.cycle
+                        if time_in_circle >= traffic.t_s and time_in_circle < traffic.t_e:
+                            bw_now += traffic.bw
+                    if bw_now >= link_alloc_bw:
+                        link_alloc_bw = bw_now
+            if link.capacity - link_alloc_bw < bottleneck_bw:
+                bottleneck_bw = link.capacity - link_alloc_bw
+        return bottleneck_bw
+
+    def update_schedule(self, new_jobs: list[JobInfo]) -> tuple[dict[int, JobSchedule], float]:
 
         # 创建 Gurobi 模型
         model = Model("TrafficScheduler")
@@ -95,8 +124,6 @@ class TrafficScheduler:
                     # 负载预测信息更新
                     self.updated_workloads.append((job_idx, workload_idx))
                     workload_num += 1
-
-        print(f"Updated workloads num = {workload_num}")
 
         self.update_traffic_pattern(self.updated_workloads)
                 
@@ -120,9 +147,9 @@ class TrafficScheduler:
         # 可以通过减小数据集中更新的负载数来降低这个简化的负面效果，后续再修改
         for job_idx, workload_idx in self.updated_workloads:
             tunnel: Tunnel = self.old_schedules[job_idx].tunnels[workload_idx]
-            bottleneck_bw = float("inf")
-            for link in tunnel:
-                bottleneck_bw = min(bottleneck_bw, link.capacity - self.link_peak_bw[link.link_id])
+
+            # 计算瓶颈带宽
+            bottleneck_bw = self.calculate_bottleneck_bw(tunnel, job_idx, workload_idx)
             model.addConstr(
                 flow_vars[(job_idx, workload_idx)] <= bottleneck_bw,
                 name=f"link_capacity_{job_idx}_{workload_idx}"
@@ -160,13 +187,12 @@ class TrafficScheduler:
                 y = new_schedules[job_idx].bw_alloc[workload_idx]
                 new_schedules[job_idx].bw_alloc[workload_idx] = flow_vars[(job_idx, workload_idx)].X
                 total_flow += new_schedules[job_idx].bw_alloc[workload_idx]
-                print(f"Job {job_idx}, Workload {workload_idx}: {new_schedules[job_idx].bw_alloc[workload_idx]}")
-            print(f"Total flow: {total_flow}")
-            return new_schedules
+            print(f"TE total flow = {total_flow}")
+            return new_schedules, total_flow
         else:
             raise ValueError("Gurobi failed to find an optimal solution.")
         
-    def greedy_alloc(self):
+    def greedy_alloc(self) -> float:
         total_flow = 0.0
         for job_idx, workload_idx in self.updated_workloads:
             workload: Workload = self.old_jobs[job_idx].workloads[workload_idx]
@@ -194,4 +220,5 @@ class TrafficScheduler:
             # 更新链路峰值带宽
             self.update_peak_bw(link_id)
             total_flow += workload.bw
-        print("Baseline Total Flow: ", total_flow)
+        print("Greedy total flow: ", total_flow)
+        return total_flow
