@@ -189,7 +189,7 @@ if __name__ == '__main__':
         if os.path.exists(jobs_file):
             print(f"\ntestcase {i}")
             try:
-                run_admission_control(topology_file, jobs_file, args.strategy)
+                run_admission_control(topology_file, jobs_file, args.phase, args.strategy)
             except Exception as e:
                 print(f"Error processing testcase {i}: {str(e)}")
         else:
