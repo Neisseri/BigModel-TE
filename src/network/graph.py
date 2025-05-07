@@ -23,8 +23,8 @@ class Graph:
         self.add_node(src)
         self.add_node(dst)
         
-        self.link_num += 1
         link = Link(self.link_num, src, dst, capacity)
+        self.link_num += 1
         self.edges[src].append(link)
 
     @classmethod

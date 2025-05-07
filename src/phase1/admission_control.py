@@ -66,7 +66,7 @@ class AdmissionController():
         
         peak_bw = 0.0
         # 在每个流量变化时间点计算总带宽
-        for time in sorted(list(self.change_points)):
+        for time in sorted(list(self.change_points[link_id])):
             bw_now = 0.0
             for traffic in self.link_traffic[link_id]:
                 job_id = traffic.job_id
