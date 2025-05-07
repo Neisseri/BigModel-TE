@@ -154,6 +154,9 @@ def run_admission_control(topology_file: str, jobs_file: str, phase: int, strate
             # 保存调度结果
             with open(result_dir + '/phase2_job_schedules.txt', 'w') as f:
                 f.write(json.dumps(new_schedules, default=lambda x: x.__dict__, indent=4))
+            
+            traffic_scheduler.greedy_alloc()
+            
             # 只调度一次
             return
 

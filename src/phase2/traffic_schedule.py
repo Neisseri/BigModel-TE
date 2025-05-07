@@ -11,6 +11,8 @@ class TrafficScheduler:
         self.old_jobs = old_jobs
         self.old_schedules = old_schedules
 
+        self.updated_workloads: list[tuple[int, int]] = [] # [i, j]: 第 i 个任务的第 j 个workload
+
         self.link_traffic: dict[int, list[Traffic]] = {} # 链路上经过的流量模式 link_id -> list[Traffic]
         # 链路所有流量变化的时间点
         self.change_points: dict[int, set[int]] = {} # link_id -> set[int]
@@ -81,7 +83,6 @@ class TrafficScheduler:
         model = Model("TrafficScheduler")
         model.setParam('OutputFlag', 0)  # 关闭输出日志
 
-        updated_workloads: list[tuple[int, int]] = [] # [i, j]: 第 i 个任务的第 j 个workload
         workload_num = 0
         for job_idx, new_job in enumerate(new_jobs):
             old_job = self.old_jobs[job_idx]
@@ -92,17 +93,17 @@ class TrafficScheduler:
                     or new_workload.t_s != old_workload.t_s
                     or new_workload.bw != old_workload.bw):
                     # 负载预测信息更新
-                    updated_workloads.append((job_idx, workload_idx))
+                    self.updated_workloads.append((job_idx, workload_idx))
                     workload_num += 1
 
         print(f"Updated workloads num = {workload_num}")
 
-        self.update_traffic_pattern(updated_workloads)
+        self.update_traffic_pattern(self.updated_workloads)
                 
         # 添加变量：updated_workload 中每个负载分配的流量大小
         # TODO: 此时每个负载分配一条流，后续需要修改为多隧道
         flow_vars = {}
-        for updated_workload in updated_workloads:
+        for updated_workload in self.updated_workloads:
             flow_vars[(updated_workload[0], updated_workload[1])] = model.addVar(
                 vtype=GRB.CONTINUOUS,
                 name=f"flow_{updated_workload[0]}_{updated_workload[1]}"
@@ -110,14 +111,14 @@ class TrafficScheduler:
 
         # 设置目标函数：最大化总流量
         model.setObjective(
-            sum(flow_vars[(job_idx, workload_idx)] for job_idx, workload_idx in updated_workloads),
+            sum(flow_vars[(job_idx, workload_idx)] for job_idx, workload_idx in self.updated_workloads),
             GRB.MAXIMIZE
         )
 
         # 链路容量约束
         # TODO: 为了简化，不考虑更新流之间的重叠（即每个约束只有一个变量）
         # 可以通过减小数据集中更新的负载数来降低这个简化的负面效果，后续再修改
-        for job_idx, workload_idx in updated_workloads:
+        for job_idx, workload_idx in self.updated_workloads:
             tunnel: Tunnel = self.old_schedules[job_idx].tunnels[workload_idx]
             bottleneck_bw = float("inf")
             for link in tunnel:
@@ -128,7 +129,7 @@ class TrafficScheduler:
             )
 
         # 带宽需求约束
-        for job_idx, workload_idx in updated_workloads:
+        for job_idx, workload_idx in self.updated_workloads:
             workload: Workload = new_jobs[job_idx].workloads[workload_idx]
             model.addConstr(
                 flow_vars[(job_idx, workload_idx)] <= workload.bw,
@@ -155,7 +156,7 @@ class TrafficScheduler:
                     new_schedules[job_idx].bw_alloc.append(bw)
 
             total_flow = 0.0
-            for job_idx, workload_idx in updated_workloads:
+            for job_idx, workload_idx in self.updated_workloads:
                 y = new_schedules[job_idx].bw_alloc[workload_idx]
                 new_schedules[job_idx].bw_alloc[workload_idx] = flow_vars[(job_idx, workload_idx)].X
                 total_flow += new_schedules[job_idx].bw_alloc[workload_idx]
@@ -164,3 +165,33 @@ class TrafficScheduler:
             return new_schedules
         else:
             raise ValueError("Gurobi failed to find an optimal solution.")
+        
+    def greedy_alloc(self):
+        total_flow = 0.0
+        for job_idx, workload_idx in self.updated_workloads:
+            workload: Workload = self.old_jobs[job_idx].workloads[workload_idx]
+            tunnel: Tunnel = self.old_schedules[job_idx].tunnels[workload_idx]
+            bottleneck_bw = float("inf")
+            for link in tunnel:
+                bottleneck_bw = min(bottleneck_bw, link.capacity - self.link_peak_bw[link.link_id])
+            # 直接分配到链路剩余带宽
+            workload.bw = min(workload.bw, bottleneck_bw)
+            # 更新链路流量
+            traffic = Traffic(
+                job_id=job_idx,
+                cycle=self.old_jobs[job_idx].cycle,
+                t_s=workload.t_s,
+                t_e=workload.t_e,
+                bw=workload.bw
+            )
+            for link in tunnel:
+                link_id = link.link_id
+                if link_id not in self.link_traffic:
+                    self.link_traffic[link_id] = []
+                    self.change_points[link_id] = set()
+                # 添加流量
+                self.link_traffic[link_id].append(traffic)
+            # 更新链路峰值带宽
+            self.update_peak_bw(link_id)
+            total_flow += workload.bw
+        print("Baseline Total Flow: ", total_flow)
