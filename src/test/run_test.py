@@ -160,8 +160,7 @@ def run_admission_control(topology_file: str, jobs_file: str, phase: int, strate
             with open(result_dir + '/phase2_job_schedules.txt', 'w') as f:
                 f.write(json.dumps(new_schedules, default=lambda x: x.__dict__, indent=4))
             
-            # total_flow2 = traffic_scheduler.greedy_alloc()
-            total_flow2 = 0
+            total_flow2 = traffic_scheduler.greedy_alloc()
 
             # 保存流量总和到文件
             with open(TRAFFIC_SCHEDULE_RESULT_FILE, 'a') as f:
@@ -188,18 +187,18 @@ if __name__ == '__main__':
 
     topology_file = 'data/topology/link_list_tmp.csv'
 
-    # for i in range(1, 51):
-    #     jobs_file = f'data/jobs/testcase{i}.json'
-    #     if os.path.exists(jobs_file):
-    #         print(f"\ntestcase {i}")
-    #         try:
-    #             run_admission_control(topology_file, jobs_file, args.phase, args.strategy)
-    #         except Exception as e:
-    #             print(f"Error processing testcase {i}: {str(e)}")
-    #     else:
-    #         print(f"Testcase {i} not found: {jobs_file}")
+    for i in range(1, 51):
+        jobs_file = f'data/jobs/testcase{i}.json'
+        if os.path.exists(jobs_file):
+            print(f"\ntestcase {i}")
+            try:
+                run_admission_control(topology_file, jobs_file, args.phase, args.strategy)
+            except Exception as e:
+                print(f"Error processing testcase {i}: {str(e)}")
+        else:
+            print(f"Testcase {i} not found: {jobs_file}")
 
     # 只跑第一个测例
-    job_file = 'data/jobs/testcase3.json'
-    run_admission_control(topology_file, job_file, args.phase, args.strategy)
+    # job_file = 'data/jobs/testcase3.json'
+    # run_admission_control(topology_file, job_file, args.phase, args.strategy)
 

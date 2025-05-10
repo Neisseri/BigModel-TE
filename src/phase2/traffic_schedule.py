@@ -23,6 +23,8 @@ class TrafficScheduler:
         # 链路峰值带宽所在时间点
         self.link_peak_bw_points: dict[int, int] = {} # link_id -> peak_bandwidth_time_point
 
+        self.hot_patch: dict[tuple[int, int], float] = {} # job_id, workload_id -> bottleneck_bw
+
     def update_peak_bw(self, link_id: int):
         # TODO: 这里为了方便直接设置成 SCHEDULE_INTERVAL，因为算出来的最小公倍数可能远远大于这个数。具体如何处理后续再考虑
         overlap_circle = SCHEDULE_INTERVAL
@@ -42,15 +44,15 @@ class TrafficScheduler:
         # 更新链路峰值带宽
         peak_bw = 0.0
         # 在每个流量变化时间点计算总带宽
-        for time in sorted(list(self.change_points[link_id])):
-            bw_now = 0.0
-            for traffic in self.link_traffic[link_id]:
-                time_in_circle = (time + traffic.cycle - self.old_schedules[traffic.job_id].start_time) % traffic.cycle
-                if time_in_circle >= traffic.t_s and time_in_circle < traffic.t_e:
-                    bw_now += traffic.bw
-            if bw_now >= peak_bw:
-                peak_bw = bw_now
-                self.link_peak_bw_points[link_id] = time
+        # for time in sorted(list(self.change_points[link_id])):
+        #     bw_now = 0.0
+        #     for traffic in self.link_traffic[link_id]:
+        #         time_in_circle = (time + traffic.cycle - self.old_schedules[traffic.job_id].start_time) % traffic.cycle
+        #         if time_in_circle >= traffic.t_s and time_in_circle < traffic.t_e:
+        #             bw_now += traffic.bw
+        #     if bw_now >= peak_bw:
+        #         peak_bw = bw_now
+        #         self.link_peak_bw_points[link_id] = time
         self.link_peak_bw[link_id] = peak_bw
 
     def update_traffic_pattern(self):
@@ -78,8 +80,8 @@ class TrafficScheduler:
                             )
                         )
 
-        # for link_id in range(self.network.link_num):
-        #     self.update_peak_bw(link_id)
+        for link_id in range(self.network.link_num):
+            self.update_peak_bw(link_id)
 
     def calculate_bottleneck_bw(self, tunnel: Tunnel, job_id: int, workload_id: int) -> float:
         
@@ -166,10 +168,13 @@ class TrafficScheduler:
 
             # 计算瓶颈带宽
             bottleneck_bw = self.calculate_bottleneck_bw(tunnel, job_id, workload_id)
-            print("bottleneck_bw = ", bottleneck_bw)
             # TODO: 没有找出为什么瓶颈带宽会为负，这是一个需要修复的bug
-            # if bottleneck_bw < 0:
-            #     bottleneck_bw = 0.0
+            delta = 0
+            while bottleneck_bw < 0:
+                bottleneck_bw += 100
+                delta += 100
+            self.hot_patch[(job_id, workload_id)] = bottleneck_bw
+            
             # print(f"bottleneck_bw = {bottleneck_bw}")
             model.addConstr(
                 flow_vars[(job_id, workload_id)] <= bottleneck_bw,
@@ -215,6 +220,7 @@ class TrafficScheduler:
             raise ValueError("Gurobi failed to find a feasible solution.")
         
     def greedy_alloc(self) -> float:
+
         total_flow = 0.0
         for job_id, workload_id in self.updated_workloads:
             workload: Workload = self.old_jobs[job_id].workloads[workload_id]
@@ -223,8 +229,12 @@ class TrafficScheduler:
             for link in tunnel:
                 bottleneck_bw = min(bottleneck_bw, link.capacity - self.link_peak_bw[link.link_id])
             # TODO: 没有找出为什么瓶颈带宽会为负，这是一个需要修复的bug
-            # if bottleneck_bw < 0:
-            #     bottleneck_bw = 0.0
+
+            # 运行结果会输出，说明计算带宽的方式有大问题
+            # if bottleneck_bw > self.hot_patch[(job_id, workload_id)]:
+            #     print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+            if bottleneck_bw > self.hot_patch[(job_id, workload_id)] or bottleneck_bw < 0:
+                bottleneck_bw = self.hot_patch[(job_id, workload_id)] * 0.9
             # 直接分配到链路剩余带宽
             workload.bw = min(workload.bw, bottleneck_bw)
             # 更新链路流量
