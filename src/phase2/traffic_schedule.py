@@ -134,12 +134,15 @@ class TrafficScheduler:
             for workload_id, new_workload in enumerate(new_job.workloads):
                 old_workload = old_job.workloads[workload_id]
                 # print(f"old_bw = {old_workload.bw}, new_bw = {new_workload.bw}")
-                if (new_workload.t_e != old_workload.t_e
-                    or new_workload.t_s != old_workload.t_s
-                    or new_workload.bw != old_workload.bw):
-                    # 负载预测信息更新
-                    self.updated_workloads.append((new_job_id, workload_id))
-                    workload_num += 1
+                # if (new_workload.t_e != old_workload.t_e
+                #     or new_workload.t_s != old_workload.t_s
+                #     or new_workload.bw != old_workload.bw):
+                #     # 负载预测信息更新
+                #     self.updated_workloads.append((new_job_id, workload_id))
+                #     workload_num += 1
+
+                # 所有任务都重新调度
+                self.updated_workloads.append((new_job_id, workload_id))
 
         self.update_traffic_pattern()
                 
@@ -169,11 +172,11 @@ class TrafficScheduler:
             # 计算瓶颈带宽
             bottleneck_bw = self.calculate_bottleneck_bw(tunnel, job_id, workload_id)
             # TODO: 没有找出为什么瓶颈带宽会为负，这是一个需要修复的bug
-            delta = 0
-            while bottleneck_bw < 0:
-                bottleneck_bw += 100
-                delta += 100
-            self.hot_patch[(job_id, workload_id)] = bottleneck_bw
+            # delta = 0
+            # while bottleneck_bw < 0:
+            #     bottleneck_bw += 100
+            #     delta += 100
+            # self.hot_patch[(job_id, workload_id)] = bottleneck_bw
             
             # print(f"bottleneck_bw = {bottleneck_bw}")
             model.addConstr(
@@ -233,8 +236,8 @@ class TrafficScheduler:
             # 运行结果会输出，说明计算带宽的方式有大问题
             # if bottleneck_bw > self.hot_patch[(job_id, workload_id)]:
             #     print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-            if bottleneck_bw > self.hot_patch[(job_id, workload_id)] or bottleneck_bw < 0:
-                bottleneck_bw = self.hot_patch[(job_id, workload_id)] * 0.9
+            # if bottleneck_bw > self.hot_patch[(job_id, workload_id)] or bottleneck_bw < 0:
+            #     bottleneck_bw = self.hot_patch[(job_id, workload_id)] * 0.8
             # 直接分配到链路剩余带宽
             workload.bw = min(workload.bw, bottleneck_bw)
             # 更新链路流量
