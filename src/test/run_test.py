@@ -17,6 +17,9 @@ from workload_fluctuate import random_fluctuate
 from params import SCHEDULE_INTERVAL
 from baseline.admission_control_bl import FCFS
 
+measure_runtime: list[int] = []
+adjust_rate: list[int] = []
+
 # 全局变量：准入结果文件路径
 ADMISSION_RESULT_FILE = 'result/admission_result.txt'
 # 全局变量：流量调度结果文件路径
@@ -24,20 +27,12 @@ TRAFFIC_SCHEDULE_RESULT_FILE = 'result/traffic_schedule_result.txt'
 
 def run_admission_control(topology_file: str, jobs_file: str, phase: int, strategy: str) -> None:
     
-    # 加载拓扑
+    # 加载拓扑和任务
     topology_df = pd.read_csv(topology_file)
-    # 加载任务
+    network: Graph = Graph.from_dataframe(topology_df)
+
     with open(jobs_file, 'r') as f:
         jobs_data = json.load(f)
-    testcase_name = os.path.splitext(os.path.basename(jobs_file))[0]
-    result_dir = os.path.join("result", testcase_name)
-    # 生成测例结果目录
-    os.makedirs(result_dir, exist_ok=True)
-
-    # 输入：网络 + 任务
-    # 网络拓扑
-    network: Graph = Graph.from_dataframe(topology_df)
-    # 任务信息
     jobs: list[JobInfo] = []
     for job in jobs_data:
         job_id = job['job_id']
@@ -54,56 +49,60 @@ def run_admission_control(topology_file: str, jobs_file: str, phase: int, strate
         job_info = JobInfo(job_id, cycle, workloads)
         jobs.append(job_info)
 
+    # 生成结果目录
+    testcase_name = os.path.splitext(os.path.basename(jobs_file))[0]
+    result_dir = os.path.join("result", testcase_name)
+    os.makedirs(result_dir, exist_ok=True)
+
     # Phase 1：准入控制
     if phase == 1:
-        print(f"Running admission control for {jobs_file} with strategy {strategy}...")
+        print(f"Admission control {strategy}: {jobs_file}")
+        start_time = time.time()
 
-        # 输出：
-        # a_j = {0, 1}，表示任务 j 是否准入
+        # 输出：a_j = {0, 1}，任务 j 是否准入
         a = [0] * len(jobs_data)
 
-        # 根据策略选择准入控制方法
-        if strategy == "TE":
+        # 准入策略
+        if strategy == "TE" or strategy == "TE-SJF":
 
-            # 启用抢占式（带宽小的任务优先）
-            jobs = sorted(jobs, key=lambda x: sum(w.bw for w in x.workloads))
-            # 跨域大模型流量工程方案
+            if strategy == "TE-SJF":
+                # 启用抢占式（带宽小的任务优先）
+                jobs = sorted(jobs, key=lambda x: sum(w.bw for w in x.workloads))
+
             admission_controller = AdmissionController(network)
+            
+            adjust_time = 0
+            
             for job_id, job in enumerate(jobs):
-                print(f"Processing job {job_id}...")
-
+                print(f"Processing: {job_id}/{len(jobs)}")
                 # Step 1：直接部署
                 a[job_id] = admission_controller.direct_deploy(job)
                 # Step 2: 局部调整
                 if a[job_id] == 0:
                     a[job_id] = admission_controller.local_adjust(job)
+                    adjust_time += 1
+            
+            adjust_rate.append(adjust_time/len(jobs))
 
         elif strategy == "FCFS":
-            # FCFS_controller = FCFS(network)
-            # for job_id, job in enumerate(jobs):
-            #     print(f"Processing job {job_id}...")
-            #     job_demand = FCFS_controller.get_demand(job)
-
-            #     a[job_id] = FCFS_controller.direct_deploy(job_demand)
-            #     # if a[job_id] == 0:
-            #     #     a[job_id] = FCFS_controller.reschedule(job_demand)
             admission_controller = AdmissionController(network)
             for job_id, job in enumerate(jobs):
-                print(f"Processing job {job_id}...")
-
-                # Step 1：直接部署
+                print(f"Processing: {job_id}/{len(jobs)}")
                 a[job_id] = admission_controller.direct_deploy(job)
+
         elif strategy == "SJF":
             # 总带宽需求小的任务优先
             priority_jobs = sorted(jobs, key=lambda x: sum(w.bw for w in x.workloads))
             admission_controller = AdmissionController(network)
             for job_id, job in enumerate(priority_jobs):
-                print(f"Processing job {job_id}...")
-
-                # Step 1：直接部署
+                print(f"Processing: {job_id}/{len(jobs)}")
                 a[job_id] = admission_controller.direct_deploy(job)
+
         else:
             raise ValueError(f"Unknown strategy: {strategy}")
+        
+        end_time = time.time()
+        measure_runtime.append(int((end_time - start_time) * 1000))
 
         print("Admitted jobs / Total jobs = ", sum(a), "/", len(jobs_data), 
             " = ", sum(a) / len(jobs_data))
@@ -170,17 +169,17 @@ def run_admission_control(topology_file: str, jobs_file: str, phase: int, strate
             return
 
 if __name__ == '__main__':
-    # 添加命令行参数解析
+
     parser = argparse.ArgumentParser(description="Run test with different strategies.")
     parser.add_argument("--phase", type=int, default=1,
                         choices=[1, 2], 
                         help="Phase to run (1 or 2, default: 1)")
     parser.add_argument("--strategy", type=str, default="TE", 
-                        choices=["TE", "FCFS", "SJF"], 
+                        choices=["TE", "FCFS", "SJF", "TE-SJF"], 
                         help="Admission control strategy to use (default: TE)")
     args = parser.parse_args()
 
-    # 创建一个空的新文件
+    # 创建准入结果文件
     os.makedirs(os.path.dirname(ADMISSION_RESULT_FILE), exist_ok=True)
     with open(ADMISSION_RESULT_FILE, 'w') as f:
         f.write("Admission Results:\n")
@@ -201,4 +200,10 @@ if __name__ == '__main__':
     # 只跑第一个测例
     # job_file = 'data/jobs/testcase3.json'
     # run_admission_control(topology_file, job_file, args.phase, args.strategy)
+
+    print("Measure runtime: ", measure_runtime)
+    print("Average runtime: ", sum(measure_runtime) / len(measure_runtime))
+
+    print("Adjust rate: ", adjust_rate)
+    print("Average adjust rate: ", sum(adjust_rate) / len(adjust_rate))
 

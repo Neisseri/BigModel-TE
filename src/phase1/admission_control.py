@@ -196,6 +196,9 @@ class AdmissionController():
 
     def local_adjust(self, job: JobInfo) -> int:
 
+        # 为了节约时间，仅调整限制次数
+        max_call_time = 1
+
         job_id = job.job_id
         # 记录分配到了第几个负载，用于后续无法准入时回退
         rollback_count = 0
@@ -217,7 +220,12 @@ class AdmissionController():
                 self.add_traffic(link.link_id, traffic)
                 if self.link_peak_bw[link.link_id] > link.capacity:
                     # 负载分配失败，尝试局部调整
-                    adjust_success = self.link_adjust(link.link_id, link.capacity)
+                    if max_call_time > 0:
+                        adjust_success = self.link_adjust(link.link_id, link.capacity)
+                    else:
+                        adjust_success = False
+
+                    max_call_time -= 1
                     if adjust_success == False:
                         tag = False
                         break
