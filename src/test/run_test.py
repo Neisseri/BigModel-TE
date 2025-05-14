@@ -10,6 +10,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from network.graph import Graph, Link
 from phase1.admission_control import AdmissionController, JobSchedule
+from phase1.aequitas import Aequitas
 from phase2.traffic_schedule import TrafficScheduler
 from job.job_info import JobInfo, EPOCH
 from job.workload import Workload
@@ -87,6 +88,10 @@ def run_admission_control(topology_file: str, jobs_file: str, scenario: str, str
         for job_id, job in enumerate(jobs):
             print(f"Processing: {job_id}/{len(jobs)}")
             a[job_id] = admission_controller.direct_deploy(job)
+
+    elif strategy == "Aequitas":
+        admission_controller = Aequitas(network)
+        a = admission_controller.deploy(jobs)
 
     else:
         raise ValueError(f"Unknown strategy: {strategy}")
@@ -201,7 +206,7 @@ if __name__ == '__main__':
                     choices=["FCFS", "SJF"], 
                     help="Admission Control Scenario (default: FCFS)")
     parser.add_argument("--strategy1", type=str, default="Ours", 
-                        choices=["Ours", "BATE"], 
+                        choices=["Ours", "BATE", "Aequitas"], 
                         help="Admission Control Strategy (default: Ours)")
     parser.add_argument("--strategy2", type=str, default="Ours",
                         choices=["Ours", "Greedy"], 
