@@ -48,7 +48,7 @@ class Priority:
     NC = 1
     BE = 2
 
-class Aequitas():
+class Seawall():
 
     def __init__(self, network: Graph):
 
@@ -56,8 +56,8 @@ class Aequitas():
 
         self.jobs: list[JobInfo] = [] # 任务列表
 
-        # 任务优先级
-        self.jobs_pri: dict[int, Priority] = {} # job_id -> Priority
+        # 任务带宽配额
+        self.jobs_quota: dict[int, int] = {} # job_id -> quota
 
         # 算路器，提供隧道
         self.path_finder = PathFinder(network)
@@ -66,8 +66,6 @@ class Aequitas():
         self.link_traffic: dict[int, list[Traffic]] = {} # 链路上经过的流量模式 link_id -> list[Traffic]
         # 任务调度
         self.job_schedules: dict[int, JobSchedule] = {} # job_id -> JobSchedule
-        # 链路准入概率
-        self.link_admit_prob: list[float] = [] 
 
         self.link_peak_bw: dict[int, float] = {} # 链路上已经分配的带宽
         self.link_peak_bw_to_update: dict[int, bool] = {} # 需要更新的链路
@@ -102,17 +100,18 @@ class Aequitas():
 
             link_alloc_bw = 0.0
 
-            if self.link_peak_bw_to_update[link.link_id] == False:
-                link_alloc_bw = self.link_peak_bw[link.link_id]
-                remaining_bw = min(remaining_bw, link.capacity - link_alloc_bw)
-                continue
+            # 计算瓶颈带宽时注释掉
+            # if self.link_peak_bw_to_update[link.link_id] == False:
+            #     link_alloc_bw = self.link_peak_bw[link.link_id]
+            #     remaining_bw = min(remaining_bw, link.capacity - link_alloc_bw)
+            #     continue
 
             # 重叠流量周期
-            # circle_list: list[int] = []
-            # for traffic in self.link_traffic[link.link_id]:
-            #     circle_list.append(traffic.cycle // 30 * 30)
-            # overlap_circle = np.lcm.reduce(circle_list) # 重叠流量周期
-            overlap_circle = SCHEDULE_INTERVAL
+            circle_list: list[int] = []
+            for traffic in self.link_traffic[link.link_id]:
+                circle_list.append(traffic.cycle // 25 * 25)
+            overlap_circle = np.lcm.reduce(circle_list) # 重叠流量周期
+            # overlap_circle = SCHEDULE_INTERVAL
 
             for traffic in self.link_traffic[link.link_id]:
                 # 添加新流量的变化时间点
@@ -126,10 +125,10 @@ class Aequitas():
             # 计算链路上已经分配的带宽
             for time in sorted(list(change_points)):
                 # 注释掉就是计算峰值带宽
-                # if time % cycle >= workload.t_s and time % cycle < workload.t_e:
-                #     None
-                # else:
-                #     continue
+                if time % cycle >= workload.t_s and time % cycle < workload.t_e:
+                    None
+                else:
+                    continue
                 bw_now = 0.0
                 for traffic in self.link_traffic[link.link_id]:
                     time_in_circle = time % traffic.cycle
@@ -148,17 +147,10 @@ class Aequitas():
         # a[j]={0, 1} 表示任务是否准入
         a: list[int] = []
 
-        # 设置任务初始优先级
-        cnt = 0
+        # 设置任务配额
         for job in jobs:
             job_id = job.job_id
-            cnt += 1
-            if cnt <= (PC_weight / (PC_weight + NC_weight + BE_weight)) * len(jobs):
-                self.jobs_pri[job_id] = Priority.PC
-            elif cnt <= ((PC_weight + NC_weight) / (PC_weight + NC_weight + BE_weight)) * len(jobs):
-                self.jobs_pri[job_id] = Priority.NC
-            else:
-                self.jobs_pri[job_id] = Priority.BE
+            self.jobs_quota[job_id] = int(sum([workload.bw for workload in job.workloads]))
             a.append(1)
 
             # 初始化所有任务调度结果
@@ -169,36 +161,37 @@ class Aequitas():
                 bw_alloc = []
             )
 
-        for link_id in range(self.network.link_num):
-            self.link_admit_prob.append(1.0) # 初始准入概率为 100%
-
         job_cnt = -1
         for job in jobs:
             job_cnt += 1
-            print(f"Processing: {job_cnt}/{len(jobs)}")
             job_id = job.job_id
             rollback_workload_tag = -1
             for workload in job.workloads:
                 rollback_workload_tag += 1
                 tunnels: list[Tunnel] = self.path_finder.find_multi_path(workload.src, workload.dst)
                 selected_tunnel: Tunnel = []
-                max_admit_prob = 0.0
+                max_quota_bw = 0.0
                 for tunnel in tunnels:
-                    # 计算隧道准入概率
-                    tunnel_admit_prob = 1.0
+                    # 计算隧道配额带宽
+                    tunnel_quota_bw = 0
                     for link in tunnel:
-                        link_admit_prob = self.link_admit_prob[link.link_id]
-                        if link_admit_prob < tunnel_admit_prob:
-                            tunnel_admit_prob = link_admit_prob
-                    if tunnel_admit_prob > max_admit_prob:
-                        max_admit_prob = tunnel_admit_prob
+                        if link.link_id not in self.link_traffic:
+                            self.link_traffic[link.link_id] = []
+                            tunnel_quota_bw = min(tunnel_quota_bw, link.capacity)
+                            continue
+                        link_quota_sum = 0
+                        for traffic in self.link_traffic[link.link_id]:
+                            link_quota_sum += self.jobs_quota[traffic.job_id]
+                        tunnel_quota_bw += link.capacity * self.jobs_quota[job_id] / (link_quota_sum + self.jobs_quota[job_id])
+                        
+                    if tunnel_quota_bw > max_quota_bw:
+                        max_quota_bw = tunnel_quota_bw
                         selected_tunnel = tunnel
                 self.job_schedules[job_id].tunnels.append(selected_tunnel)
                 remaining_bw = self.calculate_remaining_bw(selected_tunnel, workload, job.cycle)
                 if remaining_bw >= workload.bw:
                     self.job_schedules[job_id].bw_alloc.append(workload.bw)
                     for link in selected_tunnel:
-                        self.link_admit_prob[link.link_id] *= 1.0 - (workload.bw / link.capacity)
                         # 更新链路流量模式
                         traffic = Traffic(
                             job_id = job_id,
@@ -218,10 +211,10 @@ class Aequitas():
                     workload = job.workloads[workload_id]
                     selected_tunnel = self.job_schedules[job_id].tunnels[workload_id]
                     for link in selected_tunnel:
-                        self.link_admit_prob[link.link_id] /= 1.0 - (workload.bw / link.capacity)
                         if self.link_traffic[link.link_id] == []:
                             continue
                         if self.link_traffic[link.link_id][-1].job_id == job_id:
                             self.link_traffic[link.link_id].pop()
+            print(f"{job_cnt}/{len(jobs)} admit = {a[job_cnt]}")
         
         return a

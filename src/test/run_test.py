@@ -11,6 +11,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from network.graph import Graph, Link
 from phase1.admission_control import AdmissionController, JobSchedule
 from phase1.aequitas import Aequitas
+from phase1.seawall import Seawall
 from phase2.traffic_schedule import TrafficScheduler
 from job.job_info import JobInfo, EPOCH
 from job.workload import Workload
@@ -21,6 +22,7 @@ from baseline.admission_control_bl import FCFS
 measure_runtime: list[int] = []
 
 # Phase 1
+admit_rate: list[float] = []
 adjust_rate: list[int] = []
 
 # Phase 2
@@ -32,12 +34,12 @@ ADMISSION_RESULT_FILE = 'result/admission_result.txt'
 # 全局变量：流量调度结果文件路径
 TRAFFIC_SCHEDULE_RESULT_FILE = 'result/traffic_schedule_result.txt'
 
-def run_admission_control(topology_file: str, jobs_file: str, scenario: str, strategy: str) -> None:
-    
-    # 加载拓扑和任务
-    topology_df = pd.read_csv(topology_file)
-    network: Graph = Graph.from_dataframe(topology_df)
+# 网络拓扑
+network: Graph = None
 
+def run_admission_control(jobs_file: str, scenario: str, strategy: str) -> None:
+    
+    # 加载任务
     with open(jobs_file, 'r') as f:
         jobs_data = json.load(f)
     jobs: list[JobInfo] = []
@@ -92,35 +94,39 @@ def run_admission_control(topology_file: str, jobs_file: str, scenario: str, str
     elif strategy == "Aequitas":
         admission_controller = Aequitas(network)
         a = admission_controller.deploy(jobs)
+    
+    elif strategy == "Seawall":
+        admission_controller = Seawall(network)
+        a = admission_controller.deploy(jobs)
 
     else:
         raise ValueError(f"Unknown strategy: {strategy}")
     
     end_time = time.time()
-    measure_runtime.append(int((end_time - start_time) * 1000))
+    measure_runtime.append(int((end_time - start_time) * 1000 / len(jobs)))
 
-    print("Admitted jobs / Total jobs = ", sum(a), "/", len(jobs_data), 
-        " = ", sum(a) / len(jobs_data))
+    print("Admitted jobs / Total jobs = ", sum(a), "/", len(jobs), 
+        " = ", sum(a) / len(jobs))
+    
+    # 保留小数点后 4 位
+    admit_rate.append(sum(a) / len(jobs))
 
     # 生成每个测例的调度结果目录
-    testcase_name = os.path.splitext(os.path.basename(jobs_file))[0]
-    result_dir = os.path.join("result", testcase_name)
-    os.makedirs(result_dir, exist_ok=True)
+    # testcase_name = os.path.splitext(os.path.basename(jobs_file))[0]
+    # result_dir = os.path.join("result", testcase_name)
+    # os.makedirs(result_dir, exist_ok=True)
     # 保存调度结果
-    with open(result_dir + '/phase1_job_schedules.txt', 'w') as f:
-        f.write(json.dumps(admission_controller.job_schedules, default=lambda x: x.__dict__, indent=4))
+    # with open(result_dir + '/phase1_job_schedules.txt', 'w') as f:
+    #     f.write(json.dumps(admission_controller.job_schedules, default=lambda x: x.__dict__, indent=4))
 
     # 保存所有测例的准入结果到文件
-    os.makedirs(os.path.dirname(ADMISSION_RESULT_FILE), exist_ok=True)
-    with open(ADMISSION_RESULT_FILE, 'a') as f:
-        f.write(f"{os.path.basename(jobs_file)}: {sum(a)} / {len(jobs_data)} = {sum(a) / len(jobs_data):.2f}\n")
+    # os.makedirs(os.path.dirname(ADMISSION_RESULT_FILE), exist_ok=True)
+    # with open(ADMISSION_RESULT_FILE, 'a') as f:
+    #     f.write(f"{os.path.basename(jobs_file)}: {sum(a)} / {len(jobs_data)} = {sum(a) / len(jobs_data):.2f}\n")
 
-def run_traffic_schedule(topology_file: str, jobs_file: str, strategy: str) -> None:
+def run_traffic_schedule(jobs_file: str, strategy: str) -> None:
 
-    # 加载拓扑和任务
-    topology_df = pd.read_csv(topology_file)
-    network: Graph = Graph.from_dataframe(topology_df)
-
+    # 加载任务
     with open(jobs_file, 'r') as f:
         jobs_data = json.load(f)
     jobs: list[JobInfo] = []
@@ -206,14 +212,17 @@ if __name__ == '__main__':
                     choices=["FCFS", "SJF"], 
                     help="Admission Control Scenario (default: FCFS)")
     parser.add_argument("--strategy1", type=str, default="Ours", 
-                        choices=["Ours", "BATE", "Aequitas"], 
+                        choices=["Ours", "BATE", "Aequitas", "Seawall"], 
                         help="Admission Control Strategy (default: Ours)")
     parser.add_argument("--strategy2", type=str, default="Ours",
                         choices=["Ours", "Greedy"], 
                         help="Traffic Scheduling Strategy (default: Ours)")
     args = parser.parse_args()
 
+    # 加载拓扑
     topology_file = 'data/topology/link_list_tmp.csv'
+    topology_df = pd.read_csv(topology_file)
+    network: Graph = Graph.from_dataframe(topology_df)
 
     for i in range(1, 51):
         jobs_file = f'data/jobs/testcase{i}.json'
@@ -221,28 +230,32 @@ if __name__ == '__main__':
             print(f"\ntestcase {i}")
             try:
                 if args.phase == 1:
-                    run_admission_control(topology_file, jobs_file, args.scenario, args.strategy1)
+                    run_admission_control(jobs_file, args.scenario, args.strategy1)
                 elif args.phase == 2:
-                    run_traffic_schedule(topology_file, jobs_file, args.strategy2)
+                    run_traffic_schedule(jobs_file, args.strategy2)
             except Exception as e:
                 print(f"Error processing testcase {i}: {str(e)}")
         else:
             print(f"Testcase {i} not found: {jobs_file}")
 
     # 只跑第一个测例
-    # job_file = 'data/jobs/testcase3.json'
-    # run_admission_control(topology_file, job_file, args.phase, args.strategy)
+    # job_file = 'data/jobs/testcase4.json'
+    # run_admission_control(job_file, args.scenario, args.strategy1)
 
     if args.phase == 1:
-        print("Measure runtime: ", measure_runtime)
-        print("Average runtime: ", sum(measure_runtime) / len(measure_runtime))
-
-        print("Adjust rate: ", adjust_rate)
-        print("Average adjust rate: ", sum(adjust_rate) / len(adjust_rate))
+        print(f"Phase 1: {args.scenario} {args.strategy1}")
+        # 准入率
+        print(f"Admit Rate: {[round(rate, 4) for rate in admit_rate]}")
+        print("Average admit rate:", sum(admit_rate) / len(admit_rate))
+        # 平均单个任务准入时间
+        print("Runtime:", measure_runtime)
+        print("Average runtime:", sum(measure_runtime) / len(measure_runtime))
+        if args.strategy1 == "Ours":
+            print("Average adjust rate:", sum(adjust_rate) / len(adjust_rate))
     elif args.phase == 2:
         print(f"Phase 2: {args.strategy2}")
-        print("Average Runtime: ", sum(measure_runtime) / len(measure_runtime))
+        print("Average Runtime:", sum(measure_runtime) / len(measure_runtime))
 
-        print("Average Total Flow: ", sum(total_flow) / len(total_flow))
-        print("Average Traffic Rate: ", sum(traffic_rate) / len(traffic_rate))
+        print("Average Total Flow:", sum(total_flow) / len(total_flow))
+        print("Average Traffic Rate:", sum(traffic_rate) / len(traffic_rate))
 
