@@ -13,6 +13,7 @@ from phase1.admission_control import AdmissionController, JobSchedule
 from phase1.aequitas import Aequitas
 from phase1.seawall import Seawall
 from phase2.traffic_schedule import TrafficScheduler
+from phase2.ncflow import NCFlow
 from job.job_info import JobInfo, EPOCH
 from job.workload import Workload
 from workload_fluctuate import random_fluctuate
@@ -28,6 +29,7 @@ adjust_rate: list[int] = []
 # Phase 2
 total_flow: list[float] = []
 traffic_rate: list[float] = []
+job_start_time: list[float] = []
 
 # 全局变量：准入结果文件路径
 ADMISSION_RESULT_FILE = 'result/admission_result.txt'
@@ -75,15 +77,23 @@ def run_admission_control(jobs_file: str, scenario: str, strategy: str) -> None:
         adjust_time = 0 # 局部调整次数
         
         for job_id, job in enumerate(jobs):
-            print(f"Processing: {job_id}/{len(jobs)}")
             # Step 1：直接部署
             a[job_id] = admission_controller.direct_deploy(job)
             # Step 2: 局部调整
             if a[job_id] == 0:
                 a[job_id] = admission_controller.local_adjust(job)
                 adjust_time += 1
+            print(f"{job_id}/{len(jobs)} admit = {a[job_id]}")
         
         adjust_rate.append(adjust_time/len(jobs))
+
+        os.makedirs(os.path.dirname(ADMISSION_RESULT_FILE), exist_ok=True)
+        with open(ADMISSION_RESULT_FILE, 'a') as f:
+            for node in network.nodes:
+                for link in network.edges[node]:
+                    if link.link_id not in admission_controller.link_peak_bw:
+                        admission_controller.link_peak_bw[link.link_id] = 0.0
+                    f.write(f"{admission_controller.link_peak_bw[link.link_id] / link.capacity}\n")
 
     elif strategy == "BATE":
         admission_controller = AdmissionController(network)
@@ -91,13 +101,37 @@ def run_admission_control(jobs_file: str, scenario: str, strategy: str) -> None:
             print(f"Processing: {job_id}/{len(jobs)}")
             a[job_id] = admission_controller.direct_deploy(job)
 
+        os.makedirs(os.path.dirname(ADMISSION_RESULT_FILE), exist_ok=True)
+        with open(ADMISSION_RESULT_FILE, 'a') as f:
+            for node in network.nodes:
+                for link in network.edges[node]:
+                    if link.link_id not in admission_controller.link_peak_bw:
+                        admission_controller.link_peak_bw[link.link_id] = 0.0
+                    f.write(f"{admission_controller.link_peak_bw[link.link_id] / link.capacity}\n")
+
     elif strategy == "Aequitas":
         admission_controller = Aequitas(network)
         a = admission_controller.deploy(jobs)
+
+        os.makedirs(os.path.dirname(ADMISSION_RESULT_FILE), exist_ok=True)
+        with open(ADMISSION_RESULT_FILE, 'a') as f:
+            for node in network.nodes:
+                for link in network.edges[node]:
+                    if link.link_id not in admission_controller.link_peak_bw:
+                        admission_controller.link_peak_bw[link.link_id] = 0.0
+                    f.write(f"{admission_controller.link_peak_bw[link.link_id] / link.capacity}\n")
     
     elif strategy == "Seawall":
         admission_controller = Seawall(network)
         a = admission_controller.deploy(jobs)
+        
+        os.makedirs(os.path.dirname(ADMISSION_RESULT_FILE), exist_ok=True)
+        with open(ADMISSION_RESULT_FILE, 'a') as f:
+            for node in network.nodes:
+                for link in network.edges[node]:
+                    if link.link_id not in admission_controller.link_peak_bw:
+                        admission_controller.link_peak_bw[link.link_id] = 0.0
+                    f.write(f"{admission_controller.link_peak_bw[link.link_id] / link.capacity}\n")
 
     else:
         raise ValueError(f"Unknown strategy: {strategy}")
@@ -174,33 +208,43 @@ def run_traffic_schedule(jobs_file: str, strategy: str) -> None:
             tunnels = tunnels,
             bw_alloc = list(map(float, schedule['bw_alloc']))
         )
+        # if schedules[job_id].admit == 1:
+        #     job_start_time.append(schedules[job_id].start_time / jobs[job_id].cycle)
         
     new_jobs: dict[int, JobInfo] = {}
     for job_id, job in enumerate(jobs):
         if schedules[job_id].admit == 1:
             new_jobs[job_id] = job
-
-    traffic_scheduler = TrafficScheduler(network, new_jobs, schedules)
+    
+    start_time = time.time()
 
     if strategy == "Ours":
 
-        start_time = time.time()
+        traffic_scheduler = TrafficScheduler(network, new_jobs, schedules)
         flow = traffic_scheduler.update_schedule()
-        total_flow.append(flow)
-        end_time = time.time()
+        total_flow.append(flow)     
     
     elif strategy == "Greedy":
     
-        start_time = time.time()
+        traffic_scheduler = TrafficScheduler(network, new_jobs, schedules)
         flow, total_workload_bw = traffic_scheduler.greedy_alloc()
         total_flow.append(flow)
         traffic_rate.append(flow / total_workload_bw)
-        end_time = time.time()
-        measure_runtime.append(int((end_time - start_time) * 1000))
+
+    elif strategy == "NCFlow":
+
+        traffic_scheduler = NCFlow(network, new_jobs, schedules)
+        flow, total_workload_bw = traffic_scheduler.schedule()
+        print("Allocated Total Flow: ", flow)
+        total_flow.append(flow)
+        traffic_rate.append(flow / total_workload_bw)
+
+    end_time = time.time()
+    measure_runtime.append(int((end_time - start_time) * 1000 / len(new_jobs)))
 
     # 保存流量总和到文件
-    with open(TRAFFIC_SCHEDULE_RESULT_FILE, 'a') as f:
-        f.write(f"{os.path.basename(jobs_file)} {total_flow} {total_workload_bw}\n")
+    # with open(TRAFFIC_SCHEDULE_RESULT_FILE, 'a') as f:
+    #     f.write(f"{os.path.basename(jobs_file)} {total_flow} {total_workload_bw}\n")
 
 if __name__ == '__main__':
 
@@ -215,7 +259,7 @@ if __name__ == '__main__':
                         choices=["Ours", "BATE", "Aequitas", "Seawall"], 
                         help="Admission Control Strategy (default: Ours)")
     parser.add_argument("--strategy2", type=str, default="Ours",
-                        choices=["Ours", "Greedy"], 
+                        choices=["Ours", "Greedy", "NCFlow"], 
                         help="Traffic Scheduling Strategy (default: Ours)")
     args = parser.parse_args()
 
@@ -239,8 +283,9 @@ if __name__ == '__main__':
             print(f"Testcase {i} not found: {jobs_file}")
 
     # 只跑第一个测例
-    # job_file = 'data/jobs/testcase4.json'
+    job_file = 'data/jobs/testcase4.json'
     # run_admission_control(job_file, args.scenario, args.strategy1)
+    # run_traffic_schedule(job_file, args.strategy2)
 
     if args.phase == 1:
         print(f"Phase 1: {args.scenario} {args.strategy1}")
@@ -253,9 +298,12 @@ if __name__ == '__main__':
         if args.strategy1 == "Ours":
             print("Average adjust rate:", sum(adjust_rate) / len(adjust_rate))
     elif args.phase == 2:
+        # print(job_start_time)
         print(f"Phase 2: {args.strategy2}")
+        print("Runtime:", measure_runtime)
         print("Average Runtime:", sum(measure_runtime) / len(measure_runtime))
-
+        print("Total Flow:", total_flow)
         print("Average Total Flow:", sum(total_flow) / len(total_flow))
+        print("Traffic Rate:", traffic_rate)
         print("Average Traffic Rate:", sum(traffic_rate) / len(traffic_rate))
 
