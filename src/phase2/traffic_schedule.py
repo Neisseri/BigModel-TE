@@ -80,12 +80,14 @@ class TrafficScheduler:
 
         return bottleneck_bw
 
-    def update_schedule(self) -> float:
+    def update_schedule(self) -> tuple[float, float]:
 
         total_flow = 0.0
         self.link_traffic = {}
         self.change_points = {}
         self.link_peak_bw = {}
+
+        total_workload_bw = 0.0
 
         for job_id, job in self.jobs.items():
 
@@ -103,6 +105,7 @@ class TrafficScheduler:
                     lb=0.0,
                     ub=float("inf")
                 )
+                total_workload_bw += workload.bw
 
             # 设置目标函数：最大化总流量
             model.setObjective(
@@ -146,56 +149,4 @@ class TrafficScheduler:
             
             model.dispose()
 
-        print("TE Total flow: ", total_flow)
-
-        return total_flow
-    
-    def calculate_peak_bw(self, link_id: int):
-        
-        if link_id not in self.link_traffic:
-            self.link_traffic[link_id] = []
-            self.change_points[link_id] = set()
-
-        peak_bw = 0.0
-        # 在每个流量变化时间点计算总带宽
-        for time in sorted(list(self.change_points[link_id])):
-            bw_now = 0.0
-            for traffic in self.link_traffic[link_id]:
-                time_in_circle = (time + traffic.cycle - self.schedules[traffic.job_id].start_time) % traffic.cycle
-                if time_in_circle >= traffic.t_s and time_in_circle < traffic.t_e:
-                    bw_now += traffic.bw
-            if bw_now >= peak_bw:
-                peak_bw = bw_now
-        self.link_peak_bw[link_id] = peak_bw
-        
-    def greedy_alloc(self) -> tuple[float, float]:
-
-        total_flow = 0.0
-        total_workload_bw = 0.0
-
-        for link_id in range(self.network.link_num):
-            self.calculate_peak_bw(link_id)
-
-        for job_id, job in self.jobs.items():
-
-            update_link_id: set[int] = set()
-            for workload_id, workload in enumerate(job.workloads):
-                tunnel: Tunnel = self.schedules[job_id].tunnels[workload_id]
-                bottleneck_bw = float("inf")
-                for link in tunnel:
-                    bottleneck_bw = min(bottleneck_bw, self.link_peak_bw[link.link_id])
-                alloc_bw = min(workload.bw, bottleneck_bw)
-
-                
-                for link in tunnel:
-                    self.update_traffic_pattern(job_id, workload_id, alloc_bw)
-                    self.link_peak_bw[link.link_id] -= alloc_bw
-                    
-                total_flow += alloc_bw
-                total_workload_bw += workload.bw
-            
-            for link_id in update_link_id:
-                self.calculate_peak_bw(link_id)
-
-        print("Greedy total flow: ", total_flow)
         return total_flow, total_workload_bw

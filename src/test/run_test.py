@@ -13,7 +13,9 @@ from phase1.admission_control import AdmissionController, JobSchedule
 from phase1.aequitas import Aequitas
 from phase1.seawall import Seawall
 from phase2.traffic_schedule import TrafficScheduler
+from phase2.greedy import Greedy
 from phase2.ncflow import NCFlow
+from phase2.igr import IGR
 from job.job_info import JobInfo, EPOCH
 from job.workload import Workload
 from workload_fluctuate import random_fluctuate
@@ -221,19 +223,30 @@ def run_traffic_schedule(jobs_file: str, strategy: str) -> None:
     if strategy == "Ours":
 
         traffic_scheduler = TrafficScheduler(network, new_jobs, schedules)
-        flow = traffic_scheduler.update_schedule()
-        total_flow.append(flow)     
+        flow, total_workload_bw = traffic_scheduler.update_schedule()
+        print("Allocated Total Flow: ", flow)
+        total_flow.append(flow)
+        traffic_rate.append(flow / total_workload_bw)     
     
     elif strategy == "Greedy":
     
-        traffic_scheduler = TrafficScheduler(network, new_jobs, schedules)
+        traffic_scheduler = Greedy(network, new_jobs, schedules)
         flow, total_workload_bw = traffic_scheduler.greedy_alloc()
+        print("Allocated Total Flow: ", flow)
         total_flow.append(flow)
         traffic_rate.append(flow / total_workload_bw)
 
     elif strategy == "NCFlow":
 
         traffic_scheduler = NCFlow(network, new_jobs, schedules)
+        flow, total_workload_bw = traffic_scheduler.schedule()
+        print("Allocated Total Flow: ", flow)
+        total_flow.append(flow)
+        traffic_rate.append(flow / total_workload_bw)
+    
+    elif strategy == "IGR":
+
+        traffic_scheduler = IGR(network, new_jobs, schedules)
         flow, total_workload_bw = traffic_scheduler.schedule()
         print("Allocated Total Flow: ", flow)
         total_flow.append(flow)
@@ -259,7 +272,7 @@ if __name__ == '__main__':
                         choices=["Ours", "BATE", "Aequitas", "Seawall"], 
                         help="Admission Control Strategy (default: Ours)")
     parser.add_argument("--strategy2", type=str, default="Ours",
-                        choices=["Ours", "Greedy", "NCFlow"], 
+                        choices=["Ours", "Greedy", "NCFlow", "IGR"], 
                         help="Traffic Scheduling Strategy (default: Ours)")
     args = parser.parse_args()
 
