@@ -210,8 +210,11 @@ def run_traffic_schedule(jobs_file: str, strategy: str) -> None:
             tunnels = tunnels,
             bw_alloc = list(map(float, schedule['bw_alloc']))
         )
-        # if schedules[job_id].admit == 1:
-        #     job_start_time.append(schedules[job_id].start_time / jobs[job_id].cycle)
+        if schedules[job_id].admit == 1:
+            job_start_time.append(schedules[job_id].start_time / jobs[job_id].cycle)
+
+    # TODO:
+    return
         
     new_jobs: dict[int, JobInfo] = {}
     for job_id, job in enumerate(jobs):
@@ -311,7 +314,7 @@ if __name__ == '__main__':
         if args.strategy1 == "Ours":
             print("Average adjust rate:", sum(adjust_rate) / len(adjust_rate))
     elif args.phase == 2:
-        # print(job_start_time)
+        print(job_start_time)
         print(f"Phase 2: {args.strategy2}")
         print("Runtime:", measure_runtime)
         print("Average Runtime:", sum(measure_runtime) / len(measure_runtime))
