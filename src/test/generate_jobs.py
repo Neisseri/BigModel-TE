@@ -5,10 +5,10 @@ import argparse
 import os
 
 # 随机参数范围
-JOB_NUM = (10, 30) # 任务数
-CYCLE = (200, 3000) # 迭代周期
-WORKLOAD_NUM = (10, 50) # 负载数
-BANDWIDTH = (20, 70) # 带宽需求
+JOB_NUM = (1, 51) # 任务数
+CYCLE = (200, 1000) # 迭代周期
+WORKLOAD_NUM = (5, 10) # 负载数
+BANDWIDTH = (50, 70) # 带宽需求
 
 def get_host_nodes(topology_file: str) -> list[int]:
     # 读取所有 Host 节点
@@ -21,11 +21,12 @@ def get_host_nodes(topology_file: str) -> list[int]:
             hosts.add(row['z_node_id'])
     return sorted(list(hosts))
 
-def generate_jobs(host_nodes: list[int]) -> list[dict]:
+def generate_jobs(host_nodes: list[int], case_id: int) -> list[dict]:
     
     # 随机生成多个任务的 Workload
     jobs = []
-    job_num = random.randint(JOB_NUM[0], JOB_NUM[1])
+    # job_num = random.randint(JOB_NUM[0], JOB_NUM[1])
+    job_num = case_id
     
     for job_id in range(job_num):
         cycle = random.randint( CYCLE[0], CYCLE[1])
@@ -75,7 +76,7 @@ def generate_batch_workloads(topology_file: str, output_dir: str, num_cases: int
             print(f"Error deleting file {file_path}: {e}")
     
     for case_id in range(1, num_cases + 1):
-        jobs = generate_jobs(host_nodes)
+        jobs = generate_jobs(host_nodes, case_id)
         output_file = os.path.join(output_dir, f"testcase{case_id}.json")
         
         with open(output_file, 'w') as f:
