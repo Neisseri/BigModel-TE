@@ -234,8 +234,8 @@ def run_traffic_schedule(jobs_file: str, strategy: str) -> None:
         with open(TRAFFIC_SCHEDULE_RESULT_FILE, 'a') as f:
             for node in network.nodes:
                 for link in network.edges[node]:
-                    peak_pw = traffic_scheduler.calculate_peak_bw(link.link_id)
-                    f.write(f"{peak_pw / link.capacity}\n") 
+                    peak_bw = traffic_scheduler.calculate_peak_bw(link.link_id)
+                    f.write(f"{peak_bw / link.capacity}\n") 
     
     elif strategy == "Greedy":
     
@@ -245,6 +245,13 @@ def run_traffic_schedule(jobs_file: str, strategy: str) -> None:
         total_flow.append(flow)
         traffic_rate.append(flow / total_workload_bw)
 
+        with open(TRAFFIC_SCHEDULE_RESULT_FILE, 'a') as f:
+            for node in network.nodes:
+                for link in network.edges[node]:
+                    traffic_scheduler.calculate_peak_bw(link.link_id)
+                    peak_bw = traffic_scheduler.link_peak_bw[link.link_id]
+                    f.write(f"{peak_bw / link.capacity}\n") 
+
     elif strategy == "NCFlow":
 
         traffic_scheduler = NCFlow(network, new_jobs, schedules)
@@ -252,6 +259,13 @@ def run_traffic_schedule(jobs_file: str, strategy: str) -> None:
         print("Allocated Total Flow: ", flow)
         total_flow.append(flow)
         traffic_rate.append(flow / total_workload_bw)
+
+        with open(TRAFFIC_SCHEDULE_RESULT_FILE, 'a') as f:
+            for node in network.nodes:
+                for link in network.edges[node]:
+                    traffic_scheduler.calculate_peak_bw(link.link_id)
+                    available_bw = traffic_scheduler.link_peak_bw[link.link_id]
+                    f.write(f"{(link.capacity - available_bw) / link.capacity}\n") 
     
     elif strategy == "IGR":
 
@@ -260,6 +274,13 @@ def run_traffic_schedule(jobs_file: str, strategy: str) -> None:
         print("Allocated Total Flow: ", flow)
         total_flow.append(flow)
         traffic_rate.append(flow / total_workload_bw)
+
+        with open(TRAFFIC_SCHEDULE_RESULT_FILE, 'a') as f:
+            for node in network.nodes:
+                for link in network.edges[node]:
+                    traffic_scheduler.calculate_peak_bw(link.link_id)
+                    peak_bw = traffic_scheduler.link_peak_bw[link.link_id]
+                    f.write(f"{peak_bw / link.capacity}\n") 
 
     end_time = time.time()
     measure_runtime.append(int((end_time - start_time) * 1000 / len(new_jobs)))
