@@ -150,3 +150,21 @@ class TrafficScheduler:
             model.dispose()
 
         return total_flow, total_workload_bw
+    
+    def calculate_peak_bw(self, link_id: int) -> float:
+        if link_id not in self.change_points:
+            return 0.0  
+        peak_bw = 0.0
+        # 在每个流量变化时间点计算总带宽
+        for time in sorted(list(self.change_points[link_id])):
+            # 计算当前时间点的带宽
+            bw_now = 0.0
+            for traffic in self.link_traffic[link_id]:
+                traffic_job_id = traffic.job_id
+                time_in_circle = (time + traffic.cycle - self.schedules[traffic_job_id].start_time) % traffic.cycle
+                if time_in_circle >= traffic.t_s and time_in_circle < traffic.t_e:
+                    bw_now += traffic.bw
+            if bw_now >= peak_bw:
+                peak_bw = bw_now
+
+        return peak_bw

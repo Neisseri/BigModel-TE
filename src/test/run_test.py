@@ -210,16 +210,16 @@ def run_traffic_schedule(jobs_file: str, strategy: str) -> None:
             tunnels = tunnels,
             bw_alloc = list(map(float, schedule['bw_alloc']))
         )
-        if schedules[job_id].admit == 1:
-            job_start_time.append(schedules[job_id].start_time / jobs[job_id].cycle)
-
-    # TODO:
-    return
+        # NOTE：这里jobs[job_id].cycle可能index报错，因为jobs是list，之后可以改成dict，key是job_id
+        # if schedules[job_id].admit == 1:
+        #     job_start_time.append(schedules[job_id].start_time / jobs[job_id].cycle)
         
     new_jobs: dict[int, JobInfo] = {}
-    for job_id, job in enumerate(jobs):
-        if schedules[job_id].admit == 1:
-            new_jobs[job_id] = job
+    for job in jobs:
+        if job.job_id not in schedules:
+            continue
+        if schedules[job.job_id].admit == 1:
+            new_jobs[job.job_id] = job
     
     start_time = time.time()
 
@@ -229,7 +229,13 @@ def run_traffic_schedule(jobs_file: str, strategy: str) -> None:
         flow, total_workload_bw = traffic_scheduler.update_schedule()
         print("Allocated Total Flow: ", flow)
         total_flow.append(flow)
-        traffic_rate.append(flow / total_workload_bw)     
+        traffic_rate.append(flow / total_workload_bw)    
+
+        with open(TRAFFIC_SCHEDULE_RESULT_FILE, 'a') as f:
+            for node in network.nodes:
+                for link in network.edges[node]:
+                    peak_pw = traffic_scheduler.calculate_peak_bw(link.link_id)
+                    f.write(f"{peak_pw / link.capacity}\n") 
     
     elif strategy == "Greedy":
     
@@ -299,7 +305,7 @@ if __name__ == '__main__':
             print(f"Testcase {i} not found: {jobs_file}")
 
     # 只跑第一个测例
-    job_file = 'data/jobs/testcase4.json'
+    job_file = 'data/jobs/testcase49.json'
     # run_admission_control(job_file, args.scenario, args.strategy1)
     # run_traffic_schedule(job_file, args.strategy2)
 
